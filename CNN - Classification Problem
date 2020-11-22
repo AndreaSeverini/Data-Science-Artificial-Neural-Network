@@ -1,0 +1,381 @@
+## IMPORT
+# -------------------------------------------------------
+
+from IPython.core.interactiveshell import InteractiveShell
+InteractiveShell.ast_node_interactivity = "all"
+
+import os
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import json
+import shutil
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+
+SEED=1234
+#tf.set_random_seed(SEED)
+tf.random.set_seed(SEED)
+
+## RUN TO CREATE DATASET FOLDER PRESENTED BEFORE
+# -------------------------------------------------------
+
+cwd=os.getcwd()
+print(cwd) #verification of directory
+
+if not os.path.exists(cwd+'/Dataset'):
+    os.mkdir(cwd+'/Dataset')
+if not os.path.exists(cwd+'/Dataset/training'):
+    os.mkdir(cwd+'/Dataset/training')
+if not os.path.exists(cwd+'/Dataset/training/Class_0'):
+    os.mkdir(cwd+'/Dataset/training/Class_0')
+if not os.path.exists(cwd+'/Dataset/training/Class_1'):
+    os.mkdir(cwd+'/Dataset/training/Class_1')
+if not os.path.exists(cwd+'/Dataset/training/Class_2'):
+    os.mkdir(cwd+'/Dataset/training/Class_2')
+#if not os.path.exists(cwd+'/Dataset/test'):    we don't need it, i will copy entire directory with shitil.copytree
+#    os.mkdir(cwd+'/Dataset/test')
+
+## FILLING OUR DATASET FROM JSON
+# -------------------------------------------------------
+
+#Extract Array from JSON file 
+with open(cwd+'/MaskDataset/train_gt.json', 'r') as f: #
+    dict = json.load(f)
+    
+data=list(dict.items())
+data_array=np.array(data)
+
+#copying images in right class subfolders
+for files in os.listdir(cwd+'/MaskDataset/training'): #scan images 
+    for index in range(len(data_array)): #iteration over all images
+        if files==data_array[index][0]: #if same image name
+            if data_array[index][1]=='0':   #Class 0
+                filename = os.path.basename(files)
+                shutil.copyfile(os.path.join(cwd+'/MaskDataset/training/'+filename), os.path.join(cwd+'/Dataset/training/Class_0', filename))
+            if data_array[index][1]=='1':   #Class 1
+                filename = os.path.basename(files)
+                shutil.copyfile(os.path.join(cwd+'/MaskDataset/training/'+filename), os.path.join(cwd+'/Dataset/training/Class_1', filename))
+            if data_array[index][1]=='2':   #Class 2
+                filename = os.path.basename(files)
+                shutil.copyfile(os.path.join(cwd+'/MaskDataset/training/'+filename), os.path.join(cwd+'/Dataset/training/Class_2', filename))
+
+#Copy test images
+shutil.copytree(os.path.join(cwd+'/MaskDataset/test'), os.path.join(cwd+'/Dataset/test'))
+
+## CREATING IMAGEDATA GENERATO OBJECT + DATA AUGMENTATION
+# -------------------------------------------------------
+
+apply_data_augmentation = True #boolean used to set/unset data augmentation
+
+# Create training ImageDataGenerator object
+# Creating a validation split directly from ImageDataGenerator (10% of training)
+# This allows to check training performances during fitting
+
+if apply_data_augmentation:
+    train_data_gen = ImageDataGenerator(rotation_range=10,
+                                        width_shift_range=10,
+                                        height_shift_range=10,
+                                        #shear_range=0.3,
+                                        #zca_whitening=True,
+                                        zoom_range=0.3,
+                                        horizontal_flip=True,
+                                        vertical_flip=True,
+                                        fill_mode='constant',
+                                        cval=0,
+                                        rescale=1./255,       #normalization
+                                        validation_split=0.1) #validation_split
+else:
+    train_data_gen = ImageDataGenerator(rescale=1./255,       #normalization
+                                        validation_split=0.1) #validation_split
+
+# Create test ImageDataGenerator objects (no needed)
+#test_data_gen = ImageDataGenerator(rescale=1./255)            #normalization
+
+# Create validation and test ImageDataGenerator objects (no needed)
+#valid_data_gen = ImageDataGenerator(rescale=1./255)
+
+## CREATE GENERATORS TO READ IMAGES FROM DATASET DIRECTORY
+# -------------------------------------------------------
+
+dataset_dir = os.path.join(cwd+'/Dataset')
+
+# Batch size
+bs = 32
+
+# img shape
+img_h = 256
+img_w = 256
+
+num_classes=3
+
+classes = ["Class_0",                 # 0
+           "Class_1",           # 1
+           "Class_2"] 
+
+#    classes = ["NO PERSON in the image is wearing a mask",                 # 0
+#               "ALL THE PEOPLE in the image are wearing a mask",           # 1
+#               "SOMEONE in the image is not wearing a mask"]               # 2
+
+# Training
+training_dir = os.path.join(dataset_dir, 'training')  
+train_gen = train_data_gen.flow_from_directory(training_dir,   # targets are directly converted into one-hot vectors
+                                               batch_size=bs,
+                                               classes=classes,
+                                               class_mode='categorical',
+                                               shuffle=True,    #shaffle images
+                                               seed=SEED,       
+                                               subset='training', #setting as training from ImagaDataGenerator
+                                               color_mode='rgb')  
+
+# Validation (using same training directory)
+
+# Because of simpler management of our train and validation split ImageDataGenerator allows us to split directly by code
+# because we don't need to write a code just for it
+
+valid_gen = train_data_gen.flow_from_directory(training_dir,
+                                               batch_size=bs, 
+                                               classes=classes,
+                                               class_mode='categorical',
+                                               shuffle=False,      
+                                               seed=SEED,
+                                               subset='validation',   #setting as validation from ImageDataGenerator
+                                               color_mode='rgb') 
+
+# Test  (don't need, we create our test_array in csv creation, usually you don't have it and we cannot use it for training)
+# test_dir = os.path.join(dataset_dir, 'test')
+# test_dir = dataset_dir    #try to overcome no classes on test
+# test_gen = test_data_gen.flow_from_directory(test_dir,
+#                                             classes=['test'],
+#                                             #classes=None,
+#                                             batch_size=1, 
+#                                             class_mode=None,
+#                                             shuffle=False,
+#                                             seed=SEED,
+#                                             color_mode='rgb')
+
+#Check how keras assigned classes
+train_gen.class_indices
+
+## CREATE DATASET OBJECTS (from generator)
+# ----------------------
+
+# Training
+train_dataset = tf.data.Dataset.from_generator(lambda: train_gen,
+                                               output_types=(tf.float32, tf.float32),
+                                               output_shapes=([None, img_h, img_w, 3], [None, num_classes]))
+# Repeat
+# Without calling the repeat function the dataset 
+# will be empty after consuming all the images
+train_dataset = train_dataset.repeat()
+
+# Validation
+# ----------
+valid_dataset = tf.data.Dataset.from_generator(lambda: valid_gen, 
+                                               output_types=(tf.float32, tf.float32),
+                                               output_shapes=([None, img_h, img_w, 3], [None, num_classes]))
+
+# Repeat
+valid_dataset = valid_dataset.repeat()
+
+# Test
+# ----
+test_dataset = tf.data.Dataset.from_generator(lambda: test_gen,
+                                              output_types=(tf.float32, tf.float32),
+                                              output_shapes=([None, img_h, img_w, 3], [None, 1]))
+
+# Repeat
+test_dataset = valid_dataset.repeat()
+
+## LOAD VGG16 MODEL
+# ----------------------
+
+vgg = tf.keras.applications.VGG16(weights='imagenet', include_top=False, input_shape=(img_h, img_w, 3))
+vgg.summary()  #showing VGG model architecture
+
+## BUILDING OUR MODEL
+# ----------------------
+
+# Freeze the base_model up to desiderable
+vgg.trainable = True   #setting VGG16 trainable
+
+set_trainable = False
+for layer in vgg.layers:
+    if layer.name in ['block5_conv1', 'block4_conv2']: #select the layer of VGG from which you want to start fine tuning
+        set_trainable = True                           #
+    if set_trainable:
+        layer.trainable = True                         #setting trainable the layers we want
+    else:
+        layer.trainable = False                        #setting untrainable others
+
+#Just to visualize if trainable okay        
+layers = [(layer, layer.name, layer.trainable) for layer in vgg.layers]
+pd.DataFrame(layers, columns=['Layer Type', 'Layer Name', 'Layer Trainable']) 
+
+# Create new model on top
+model = tf.keras.Sequential()  #starting new sequential model
+
+
+model.add(vgg)    #adding VGG model before TOP
+model.add(tf.keras.layers.Flatten())  #flattening before dense layer
+model.add(tf.keras.layers.Dropout(0.5))  #dropuot regularization
+
+# Classifier
+tf.keras.regularizers.L2(
+    l2=0.01)
+
+#Uncomment to add layers,
+#model.add(tf.keras.layers.Dense(units=128, activation='relu',kernel_regularizer='l2', bias_regularizer='l2'))
+#model.add(tf.keras.layers.Dropout(0.4))  #dropuot regularization
+#model.add(tf.keras.layers.Dense(units=32, activation='relu',kernel_regularizer='l2', bias_regularizer='l2'))
+#model.add(tf.keras.layers.Dropout(0.5))  #dropuot regularization
+
+model.add(tf.keras.layers.Dense(units=16, activation='relu',kernel_regularizer='l2', bias_regularizer='l2'))
+model.add(tf.keras.layers.Dropout(0.4))  #dropuot regularization
+
+#model.add(tf.keras.layers.Dense(units=8, activation='relu',kernel_regularizer='l2', bias_regularizer='l2'))
+#model.add(tf.keras.layers.Dropout(0.4))  #dropuot regularization
+
+model.add(tf.keras.layers.Dense(units=num_classes, activation='softmax'))
+
+# Visualize created model as a table
+model.summary()
+
+# Visualize initialized weights
+model.weights
+
+# HYPERPARAMETERS
+# -------------------
+
+# Loss
+loss = tf.keras.losses.CategoricalCrossentropy()  
+
+# learning rate
+lr = 1e-4    #very low learning rate to avoid destroying VGG16 pre-trained model in fine tuning 
+optimizer = tf.keras.optimizers.Adam(learning_rate=lr)
+# -------------------
+
+# Validation metrics
+# ------------------
+
+metrics = ['accuracy']
+# ------------------
+
+# Compile Model with our Hyperparameters
+model.compile(optimizer=optimizer, loss=loss, metrics=metrics)  
+
+model.summary()
+
+## CALLBACKS (Run only if you want callbacks, before check directory)
+# ----------------------
+
+#Creating Callbacks to track training/validation and show on tensorboard
+
+import os
+from datetime import datetime
+
+
+cwd = os.getcwd()
+
+exps_dir = os.path.join('/content/drive/My Drive/Keras/', 'Classification_experiments')  #you have to create your folder to save ckpt
+if not os.path.exists(exps_dir):
+    os.makedirs(exps_dir)
+
+now = datetime.now().strftime('%b%d_%H-%M-%S')
+
+model_name = 'CNN'
+
+exp_dir = os.path.join(exps_dir, model_name + '_' + str(now))
+if not os.path.exists(exp_dir):
+    os.makedirs(exp_dir)
+    
+callbacks = []
+
+# Model checkpoint
+
+ckpt_dir = os.path.join(exp_dir, 'ckpts')
+if not os.path.exists(ckpt_dir):
+    os.makedirs(ckpt_dir)
+
+ckpt_callback = tf.keras.callbacks.ModelCheckpoint(filepath=os.path.join(ckpt_dir, 'cp_{epoch:02d}.ckpt'), 
+                                                   save_weights_only=True)  # False to save the model directly
+callbacks.append(ckpt_callback)                                             # Jump to model.fit to reload ckpt
+
+# Visualize Learning on Tensorboard
+
+tb_dir = os.path.join(exp_dir, 'tb_logs')
+if not os.path.exists(tb_dir):
+    os.makedirs(tb_dir)
+    
+# By default shows losses and metrics for both training and validation
+
+tb_callback = tf.keras.callbacks.TensorBoard(log_dir=tb_dir,
+                                             profile_batch=0,
+                                             histogram_freq=1)  # if 1 shows weights histograms
+callbacks.append(tb_callback)
+
+# Early Stopping
+
+early_stop = True
+if early_stop:
+    es_callback = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)  #patience low=best reaction to overfitting, no taking into account jumps
+    callbacks.append(es_callback)                                                   #if stopped early restart fitting
+    
+## TENSORBOARD
+# ----------------------
+
+%load_ext tensorboard
+%tensorboard --logdir /content/drive/MyDrive/Keras/Classification_experiments/
+
+## MODEL FIT
+# ----------------------
+
+#use only if you want to restore previous model weights
+#ckpt = tf.train.Checkpoint(step=tf.Variable(1, dtype=tf.int64),  net=model)
+#ckpt.restore(tf.train.latest_checkpoint('checkpoint_path.ckpt')) 
+
+model.fit(x=train_dataset,
+          epochs=100,  #### set repeat in training dataset
+          steps_per_epoch=len(train_gen),
+          validation_data=valid_dataset,
+          validation_steps=len(valid_gen),
+          callbacks=callbacks)
+          #validation_steps=560)
+          
+ ## CSV FUNCTION AND OUTPUT FOR KAGGLE COMPETITION
+# ----------------------
+
+from datetime import datetime
+
+def create_csv(results, results_dir='./'):
+
+    csv_fname = 'results_'
+    csv_fname += datetime.now().strftime('%b%d_%H-%M-%S') + '.csv'
+
+    with open(os.path.join(results_dir, csv_fname), 'w') as f:
+
+        f.write('Id,Category\n')
+
+        for key, value in results.items():
+            f.write(key + ',' + str(value) + '\n')
+
+from PIL import Image
+
+
+image_filenames = next(os.walk(os.path.join(dataset_dir, 'test')))[2]
+
+results = {}
+for image_name in image_filenames:  #iterator
+    img = Image.open(dataset_dir+'/test/{}'.format(image_name)).convert('RGB')
+    img=img.resize((img_h,img_w)) #resizing as train and valid to 256x256
+    img_array = np.array(img)
+    img_array = np.expand_dims(img_array, 0) 
+    img_array=img_array/255.      #normalization as in generator
+   
+    prediction=model.predict(img_array)  #predict probability
+    classes=np.argmax(prediction)        #predict class
+    results[image_name] = classes        #save in "results"
+    
+
+create_csv(results,'/content/drive/MyDrive/Keras')  #using our CSV creation function, set directory in which you want to save
+
